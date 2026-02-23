@@ -1,0 +1,442 @@
+I am planning a Single Front Door initiative for a financial data company. At the moment, the company has dozens of different platforms - providing access to data and visualisations in separate web apps, and access to data via APIs. Additionally, the company has also started to offer MCP server tools to partner companies and customers, to allow them to access the company’s financial data from within their systems. The new Single Front Door initiative aims to provide access to all the company’s financial data in a single platform, meaning that customers will not need to login in to several system systems to retrieve and combine data. The obvious solution to offer in the Single Front Door product is the ability to issue complex prompts which synthesise and summarise data from multiple data sources (from mcp servers associated with the existing dozens of different platforms) - essentially this means non-deterministic responses from AI agents. However, I believe it also makes sense to support simpler workflows as well - allow users an easy mechanism to query and return single data sources. It would be tempting to implement the querying and returning of single data sources via the same mechanism and the synthesis / summarisation i.e. using AI agents to call mcp server tools and return the data. I want to analyse the pros and cons of different mechanism of supporting query and return single data sources. In particular, I’m concerned that supporting this via AI agents and mcp server tools might consume a lot of LLMs tokens. My assumption is that when an AI agent connects an mcp server tool to an LLM, this would mean all the data returned from the mcp server tools will effectively be run through the model and consume tokens. But I want to validate is my assumption is correct. I believe an alternative approach for supporting single queries like this would be to have the AI agent still infer from the user prompts the correct mcp server tool to use to retrieve the data, but instead of having the tool return the raw data, it would provide some context (i.e. identifiers, filters, etc.) that would be passed back to the Single Front Door frontend web app to allow that web app to spin up a frontend component which requests the given data via a ‘traditional’ data API (i.e. not via the AI agent / LLM / MCP server tools) and displays it. The crux of the issue is whether using AI agents / MCP server tools to return deterministic data is a good pattern, or whether in some circumstances it can be better to use a hybrid approach i.e. use AI agents / LLM / MCP server tools to get context to allow a frontend to query non-agent /  non-MCP APIs. An example of this would be where the data involved multiple data attributes for 365 days to plot multiple series on a chart. And I suspect the hybrid approach might be better not just on cost grounds, but potentially also on performance grounds. I say this because streaming data via an agent response could be unnecessarily slow, because deterministic data results do not need to be passed via an AI agent / LLM in a streaming response - they can be retrieved very quickly via efficient traditional data APIs. I want you to analyse and summarise the key issues I have discussed, along with any related issues. I then want you to recommend when you would use each of the approaches I outlined - citing determinism vs non-determinism, performance, cost and other angles.
+
+
+You’re basically deciding whether “agent tool calls” are your data plane (returning deterministic datasets through MCP → LLM → UI) or whether they should mostly be your control plane (LLM chooses what to fetch; the UI/data services fetch the bytes through traditional APIs). That’s the right framing.
+
+Below is a structured summary of the key issues, validation of your token assumption, and a set of concrete recommendations for when to use each approach.
+
+1) Key issues you raised (and the ones that fall out of them)
+A. Deterministic retrieval vs non-deterministic synthesis
+Deterministic: “Give me series X for instrument Y over last 365 days.”
+
+ The output is structured, repeatable, and usually large.
+
+
+Non-deterministic: “Explain what drove the change in credit spreads this quarter across my portfolio.”
+
+ The output is narrative, synthesized, sometimes uncertain, and benefits from reasoning across sources.
+
+
+Implication: Deterministic retrieval wants reliability, performance, and structured outputs. Non-deterministic synthesis wants reasoning, summarisation, provenance, and narrative UX.
+
+B. Your token-cost assumption (is it correct?)
+Your assumption is directionally correct in most implementations:
+
+In typical agent/tool architectures, tool results are inserted into the model’s context so the model can decide what to do next or how to respond.
+
+
+If a tool returns a large dataset (rows, JSON blobs, long time series), and you pass it to the LLM, you pay tokens for that data (input tokens), and you may also pay tokens to generate the response (output tokens).
+
+
+Important nuance: It’s not inevitable that “all tool-returned data must be run through the model.”
+
+It depends on your orchestration design:
+
+You can design tools to return small structured summaries, IDs, cursors, pre-signed URLs, handles, or pointers to data stored elsewhere.
+
+
+You can also separate the flow into:
+
+
+“LLM decides what to fetch + parameters” (small tokens)
+
+
+“Data plane fetch happens outside the LLM” (no LLM tokens for payload)
+
+
+“LLM optionally summarizes a selected subset” (bounded tokens)
+
+
+So: If you return raw datasets via MCP tool results into the model context, yes, token costs can blow up. But you can architect around it.
+
+C. Performance and latency
+If deterministic data flows through an agent response path:
+
+You add latency from:
+
+
+tool call orchestration,
+
+
+model turns (sometimes multiple),
+
+
+streaming textual serialization,
+
+
+and UI parsing.
+
+
+Large payloads are slower to transmit as text, and the user experience is worse than a binary/columnar/optimized API fetch.
+
+
+Whereas “UI/API fetch + render”:
+
+can be fast, cacheable, paginated, and uses efficient formats (JSON with compression, Arrow, Parquet, protobuf, etc.).
+
+
+avoids model turn latency for the bulk transfer.
+
+
+D. Reliability, correctness, and auditability (often more important than cost)
+For deterministic data:
+
+You typically need:
+
+
+exactness (no hallucinated numbers),
+
+
+repeatability,
+
+
+explainable provenance (“where did this number come from?”),
+
+
+strong typing (schema),
+
+
+entitlement checks,
+
+
+and audit logs.
+
+
+Routing deterministic datasets through an LLM increases risk of:
+
+accidental transformation,
+
+
+truncation,
+
+
+formatting loss,
+
+
+or “helpful” but wrong massaging.
+
+
+For non-deterministic synthesis:
+
+you still need provenance and auditability, but the output is expected to be interpretive. You’ll want:
+
+
+citations to underlying sources,
+
+
+trace of tool calls,
+
+
+and a “show underlying data” affordance.
+
+
+E. Security & governance (especially with MCP/tools)
+Two big considerations:
+
+Prompt injection via tool outputs: if tool responses include untrusted text, it can manipulate the model (“ignore previous instructions…”).
+
+ Deterministic APIs reduce this surface; tools must be hardened with strict schemas and sanitization.
+
+
+Entitlements & policy enforcement: you want enforcement in the data plane (API layer), not “best-effort” inside the LLM.
+
+
+2) The two patterns you described (plus the practical “third”)
+Approach 1 — “All-in agent”: MCP tools return the raw data; LLM returns it to the UI
+Pros
+
+Simple mental model: “ask → agent fetches → agent answers”
+
+
+Fast to prototype and unify across dozens of platforms
+
+
+Works nicely for small deterministic payloads and for synthesis
+
+
+Cons
+
+Token cost scales with payload size
+
+
+Latency scales with payload size and model turns
+
+
+Higher risk of truncation, formatting loss, accidental transformation
+
+
+Harder to support rich UX (charts, drilldowns, crossfilters) unless you rebuild those inside an agent-driven UI paradigm
+
+
+Where it shines
+
+Small payloads (top N rows, single quote, one KPI)
+
+
+“Explain / summarize / compare / diagnose” tasks
+
+
+Conversational exploration where exactness is less critical than insight (but you still provide provenance)
+
+
+Approach 2 — Hybrid control plane: LLM selects tool + parameters, returns 
+context
+; UI fetches data via traditional APIs and renders components
+(Your “tool returns identifiers/filters/cursors, not the dataset” idea.)
+
+Pros
+
+Predictable cost: model sees parameters, not bulk data
+
+
+Performance: efficient data retrieval, caching, pagination
+
+
+Determinism: schemas stay intact end-to-end
+
+
+Rich UX: charts/tables behave like a normal analytics product
+
+
+Better governance: entitlements and policy live in the API/data tier
+
+
+Cons
+
+More engineering: you need a clean contract between
+
+
+“intent → query plan”
+
+
+and “query plan → API calls + UI components”
+
+
+Requires standardized query semantics across your dozens of sources (or a translation layer)
+
+
+Where it shines
+
+Large datasets (e.g., 365-day multi-series charts, panels, dashboards)
+
+
+Anything requiring strong determinism and repeatability
+
+
+High-frequency interactions (filtering, zooming, drilling) where an LLM would be wasteful
+
+
+The practical “third” you’ll almost certainly want — Two-stage bounded summarization
+A common winning pattern is:
+
+Hybrid retrieval fetches deterministic data outside the model
+
+
+The model is given:
+
+
+a small subset (top rows, aggregates),
+
+
+or a computed feature set (stats, deltas, anomalies),
+
+
+plus pointers to the full dataset (so the UI can show it)
+
+
+The model generates narrative insights/caveats with citations
+
+
+This keeps:
+
+determinism + performance,
+
+
+while still enabling the “AI workspace” value.
+
+
+3) Recommendations: when to use which approach
+Use Approach 1 (agent returns raw data) when…
+Payload is small and bounded:
+
+
+single instrument snapshot, one KPI, top 10 rows, one document excerpt
+
+
+You explicitly want natural-language formatting as the primary output
+
+
+The user’s goal is interpretation, not building a chart or dataset
+
+
+You can enforce strict output contracts (schema + limits) to avoid runaway tokens
+
+
+Guardrails to add
+
+Hard limits on tool response size (rows/bytes/tokens)
+
+
+Pagination/cursors instead of full dumps
+
+
+“Summarize-only” tool variants (return aggregates rather than raw)
+
+
+Use Approach 2 (hybrid: agent returns context; UI fetches data) when…
+The result is large, structured, or interactive:
+
+
+365-day time series
+
+
+multi-series charts
+
+
+portfolios
+
+
+watchlists
+
+
+anything that will be filtered/sorted repeatedly
+
+
+You need strong determinism, precise schemas, and auditability
+
+
+You want speed and a “normal analytics UI” feel
+
+
+You expect users to reuse results (download, export, pin to dashboard)
+
+
+The key contract
+
+Have the LLM produce a Query Plan object (structured JSON), e.g.:
+
+datasource/tool identifier
+
+
+semantic entity resolution results (instrument IDs, portfolio IDs)
+
+
+fields/metrics
+
+
+time range and grain
+
+
+filters and joins
+
+
+desired visual component type (table / line chart / heatmap)
+
+
+and a provenance stub (what it decided and why)
+
+
+Then the UI (or a backend-for-frontend) executes that plan via deterministic APIs.
+
+Use the “third pattern” (hybrid retrieval + bounded summarization) when…
+Users want both:
+
+
+the chart/table and
+
+
+a narrative explanation (“what changed?”)
+
+
+You want to control cost by giving the model:
+
+
+aggregates,
+
+
+anomalies,
+
+
+small slices,
+
+
+plus pointers to full data
+
+
+You need a great UX for “insight” without making the LLM the transport
+
+
+4) Additional design considerations that matter in Single Front Door
+A. Treat MCP/agents as orchestration, not bulk transport
+If you let tools become the transport for big datasets, you’ll fight:
+
+token budgets,
+
+
+latency,
+
+
+truncation,
+
+
+and UX limitations.
+
+
+A good north star:
+
+LLM = intent, planning, explanation
+
+
+APIs = data retrieval
+
+
+UI = visualization + interaction
+
+
+B. Observability & audit (“what did we show the user?”)
+You’ll want two complementary logs:
+
+Agent trace: prompts, tool calls, parameters, versions, reasoning summaries
+
+
+Data provenance: dataset IDs, query hashes, API responses (or checksums), entitlements evaluated, timestamps
+
+
+This is crucial for regulated financial contexts.
+
+C. Caching and reusability
+Hybrid retrieval makes it easy to:
+
+cache datasets by query hash,
+
+
+share links to a stable result,
+
+
+support “pin this to dashboard,”
+
+
+and avoid recomputation.
+
+
+D. User experience: “conversational control” + “visual truth”
+A strong SFD UX usually becomes:
+
+chat to express intent,
+
+
+the system materializes tables/charts as first-class UI objects,
+
+
+chat continues about those objects (filter, compare, explain).
+
+
+That aligns naturally with the hybrid / two-stage approach.
+
+5) A simple rule of thumb (works well in practice)
+If the user’s next step is likely to be “render, interact, drill down, export, or reuse,” don’t stream the dataset through the LLM.
+
+Use the hybrid plan → API → component route.
+
+If the user’s next step is likely to be “interpret, summarize, compare, or decide,” use the LLM—fed with bounded, well-chosen evidence and clear provenance.
+

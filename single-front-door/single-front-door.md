@@ -1,6 +1,6 @@
 # Single Front Door
 
-## High-Level Topics
+## High-Level AI / UI Integration Topics
 
 ### 1. Query Handling & Navigation
 
@@ -9,6 +9,7 @@
 - Distinguishing deterministic (simple, low-cost) queries from non-deterministic (complex, agent-driven) ones
 - Routing strategy - rule-based / retrieval-based answers vs full LLM reasoning chains
 - Avoiding unnecessary token burn for queries that can be resolved with direct lookup or navigation
+- Rendering Strategy - Pre-built vs Generic vs Declarative UI (e.g. A2UI) **TODO - This should really be a section in its own right**
 - Upsell / cross-sell opportunities e.g. previews of complementary, related products / datasets
 
 #### Navigation
@@ -26,17 +27,69 @@
 
 ---
 
-### 3. Rendering Strategy: Pre-built vs Generic vs Declarative UI
+### 3. Token Cost and Performance - Data Plane vs Control Plane
 
-- **Pre-built renderers**: custom visualisations for specific datasets (e.g. credit risk heatmaps, ownership treemaps) - high fidelity, high maintenance cost
-- **Generic renderers**: reusable chart/table components driven by structured data - flexible but lower specificity
-- **Declarative / Generative UI**: AI-emitted UI descriptions rendered at runtime (e.g. A2UI patterns) - dynamic but requires guardrails
-- Decision framework for choosing the right rendering approach per use case
-- Hybrid strategies and fallback chains
+#### 3.1 Overview
+
+- The Single Front Door is likely to serve two fundamentally different query types:
+  - **Non-deterministic** - synthesis and summarization across sources. This leverages LLM reasoning
+  - **Deterministic** - structured dataset retrieval (repeatable, exact, can be large).
+- **The architecture choice for each query type has significant cost, performance and reliability implications**
+- The query types can be handle by two contrasting patterns:
+  - **Data Plane** - where raw data flows through the LLM. The agent calls MCP tools, data is inserted into LLM context, LLM returns data to the frontend
+  - **Control Plane** - LLM decides what to fetch and resolves parameters. Data bypasses the LLM and is retrieved directly by the frontend via traditional data APIs
+- When raw data flows through the LLM, **token costs scale directly with payload size** - e.g. 365-day multi-series dataset can consume thousands of input tokens with no reasoning benefit from the LLM processing it
+- Latency - beyond the cost implications, routing deterministic data through an LLM:
+  - adds latency - tool orchestration, model turns, streaming serialization
+  - can risk data integrity - reformatting, accidental transformation
+- Single Front Door could select the most appropriate pattern based on the query type e.g.
+  - large amounts of data, interactivity, drill down, etc. - don't stream the dataset through the LLM.
+  - interpreting, synthesizing, summarizing or comparing - use the LLM, fed with bounded, well-chosen evidence and clear provenance
 
 ---
 
-### 4.1 A2UI Overview
+### 3.2 Approach A - Data Plane (All-in Agent)
+
+The agent calls MCP tools, raw data is inserted into the LLM context, and the LLM returns the result directly to the frontend.
+
+| | |
+|---|---|
+| **Pros** | Simple mental model - ask -> agent fetches -> agent answers; fast to prototype across dozens of data sources; works well for small payloads and synthesis tasks |
+| **Cons** | Token cost and latency both scale with payload size; risk of truncation, formatting loss, or accidental data transformation by the LLM; difficult to support rich interactive UX (charts, drill-downs, cross-filters) |
+| **Best for** | Small bounded payloads (single quote, one KPI, top 10 rows); tasks where natural-language output is the primary goal (explain, summarise, compare); conversational exploration where insight matters more than exactness |
+
+Guardrails required to make this viable:
+- Hard limits on tool response size (rows / bytes / tokens)
+- Pagination and cursors rather than full data dumps
+- "Summarise-only" tool variants that return aggregates rather than raw rows
+
+---
+
+### 3.3 Approach B - Control Plane (Hybrid)
+
+The LLM infers intent and resolves parameters, returning a **Query Plan** (structured JSON). The frontend or a backend-for-frontend executes the plan by calling traditional data APIs directly - the bulk data never touches the LLM.
+
+| | |
+|---|---|
+| **Pros** | Predictable token cost (model sees parameters, not payload); fast and cacheable data retrieval via optimised APIs; schemas stay intact end-to-end; rich interactive UX behaves like a normal analytics product; entitlements enforced at the API tier |
+| **Cons** | More engineering - requires a clean contract between intent -> query plan and query plan -> API calls + UI components; requires standardised query semantics across data sources or a translation layer |
+| **Best for** | Large datasets (365-day time series, multi-series charts, portfolios, watchlists); anything requiring strong determinism and audit trails; interactions that will be filtered, sorted or exported repeatedly |
+
+The Query Plan contract - the LLM produces a structured JSON object containing:
+- Datasource / tool identifier and resolved entity IDs (instrument, portfolio, etc.)
+- Fields, metrics, time range, grain and filters
+- Desired visual component type (table / line chart / heatmap)
+- Provenance stub - what the LLM decided and why
+
+---
+
+### 3.4 Approach C - Two-Stage Bounded Summarisation
+
+**TODO - Consider adding a third approach - data fetched outside LLM but model given a bounded subset e.g. key statistics**
+
+---
+
+### 4.1 A2UI - Overview
 
 #### Overview
 
@@ -50,7 +103,7 @@
 - Reached v0.8 as of Feb 2026
 - Huge potential, but still very new
 
-#### Why we would use this
+#### Where and why we would use this
 
 - Dynamically compose custom views and dashboards that combine results from multiple datasets
 - Agent selects the best representation based on the data shape
@@ -59,7 +112,7 @@
 
 ---
 
-### 4.2 A2UI Architecture
+### 4.2 A2UI - Architecture
 
 ```mermaid
 flowchart LR
@@ -84,7 +137,7 @@ flowchart LR
 
 ---
 
-### 4.3 A2UI Example - Rating Card
+### 4.3 A2UI - Rating Card Example
 
  Agent composes through component structure - prominent properties are expressed via `CardHeader` (rendered large), secondary properties via `CardBody` fields (rendered small).
 
@@ -121,7 +174,7 @@ flowchart LR
 
 ---
 
-### 4.4 A2UI Implementation Options
+### 4.4 A2UI - Implementation Considerations
 
 | Approach | Who chooses component structure | Flexibility | Reliability |
 |---|---|---|---|
@@ -209,4 +262,4 @@ sequenceDiagram
 - Handled entirely at the agent-to-MCP-server boundary
 - MCP App iframe carries no credentials and requires none
 - Data arrives via postMessage from the partner frontend, which proxied it from the agent
-- Significant easier to implement than traditional cross-vendor iframe integrations, where the embedded app must authenticate independently (cross-origin OAuth flows, client-side credential management)
+- Significant easier to implement than traditional cross-vendor iframe integrations, where the embedded app must authenticate independently (cross-origin OAuth flows, client-side credential management) **TODO - Could include in appendix the Fincentric arch & auth flow diagram for a contrasting example of traditional integration**

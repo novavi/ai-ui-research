@@ -2,31 +2,35 @@
 
 ## High-Level Topics
 
----
+### 1. Query Handling & Navigation
 
-### 1. Simple vs Complex Query Handling
+#### Query Handling
 
 - Distinguishing deterministic (simple, low-cost) queries from non-deterministic (complex, agent-driven) ones
-- Routing strategy: rule-based / retrieval-based answers vs full LLM reasoning chains
+- Routing strategy - rule-based / retrieval-based answers vs full LLM reasoning chains
 - Avoiding unnecessary token burn for queries that can be resolved with direct lookup or navigation
-- UX implications: response latency and interaction model differ between the two paths
+- Upsell / cross-sell opportunities e.g. previews of complementary, related products / datasets
 
----
+#### Navigation
 
-### 2. Navigation
+- Prompt-based navigation to complement traditional menu / drill-down UX
+- Mapping natural language intent to existing app components / dashboards / reports
+- Handling ambiguity - a prompt might map to multiple destinations
+- In the short-term, could also support deep-linking into legacy web apps from the chat interface
 
-- Prompt-based navigation as a replacement or complement to menu/drill-down UX
-- Mapping natural language intent to existing app surfaces, reports, and data views
-- Deep-linking into legacy web apps from the chat interface
-- Handling ambiguity: when a prompt could map to multiple destinations
+### 2. Performance
+
+- Users expect visual interfaces to be highly performant when it comes to data selection, filtering, sorting, etc.
+- However, when using issuing complex prompts to AI agent chat interfaces with text-based responses, user performance expectations tend to be lower.
+- **Significant UX implications with rich visual interactive interfaces in AI platforms. Response latency and interaction model differs markedly between deterministic and non-deterministic paths. There is a risk of creating a mismatch in performance expectations.**
 
 ---
 
 ### 3. Rendering Strategy: Pre-built vs Generic vs Declarative UI
 
-- **Pre-built renderers**: custom visualisations for specific datasets (e.g. credit risk heatmaps, ownership treemaps) — high fidelity, high maintenance cost
-- **Generic renderers**: reusable chart/table components driven by structured data — flexible but lower specificity
-- **Declarative / Generative UI**: AI-emitted UI descriptions rendered at runtime (e.g. A2UI patterns) — dynamic but requires guardrails
+- **Pre-built renderers**: custom visualisations for specific datasets (e.g. credit risk heatmaps, ownership treemaps) - high fidelity, high maintenance cost
+- **Generic renderers**: reusable chart/table components driven by structured data - flexible but lower specificity
+- **Declarative / Generative UI**: AI-emitted UI descriptions rendered at runtime (e.g. A2UI patterns) - dynamic but requires guardrails
 - Decision framework for choosing the right rendering approach per use case
 - Hybrid strategies and fallback chains
 
@@ -34,22 +38,24 @@
 
 ### 4.1 A2UI Overview
 
-#### How it works
+#### Overview
 
-- Agent-to-UI (A2UI): AI agents emit structured JSON schemas describing UI components rather than raw HTML or markdown
-- The schema defines component type, layout, data bindings, and interaction handlers — all resolved at render time
-- A frontend rendering layer validates the schema against a contract, then maps component types to concrete design system components
-- Supports streaming: partial schemas can be rendered progressively as the agent response arrives
-- Stateless by design — each agent response describes a self-contained UI fragment; state lives in the frontend shell
-- Versioned schema contracts decouple agent output from frontend component evolution
+- A2UI (Agent-to-UI) enables Declarative UIs, by allowing AI agents to dynamically compose UIs at runtime
+- Instead of relying on a pre-built UI components or emitting raw HTML, agents emit structured JSON schemas describing interface they want rendered, based on the query data shape
+- The schema defines component type, layout, data bindings, and interaction handlers - all resolved at render time
+- Frontend rendering layer validates schema and maps types to concrete design system components
+- Supports streaming - partial schemas can be rendered progressively as the agent response arrives
+- Stateless by design - each agent response describes a self-contained UI fragment
+- Created by Google with contributions from CopilotKit
+- Reached v0.8 as of Feb 2026
+- Huge potential, but still very new
 
-#### Where we would use this
+#### Why we would use this
 
-- Dynamically composing dashboards that combine results from multiple data products (e.g. credit ratings alongside company fundamentals)
-- When the optimal visualisation type is not known at query time — the agent selects the best representation based on the data shape
-- Reducing the need for pre-built routes and hardcoded views for every possible data combination
-- Bespoke report generation — agent assembles a personalised layout based on user context, portfolio, or stated preferences
-- Power users who want to compose custom views through natural language without developer intervention
+- Dynamically compose custom views and dashboards that combine results from multiple datasets
+- Agent selects the best representation based on the data shape
+- Reduce the need to develop and maintain pre-built components for every possible data combination
+- Personalised layouts based on user persona, context or stated preferences
 
 ---
 
@@ -58,79 +64,114 @@
 ```mermaid
 flowchart LR
     A([User Prompt]) --> B[Agent / LLM]
-    B --> C[UI Schema\nJSON Output]
-    C --> D{Schema\nValidator}
-    D -->|valid| E[Component\nResolver]
-    D -->|invalid| F[Fallback\nRenderer]
-    E --> G[Design System\nComponents]
-    G --> H([Rendered UI\nFragment])
-    I[(Component\nRegistry)] -.->|resolves types| E
-    J[(Data /\nProps)] -.->|injected into| G
+    B --> C[UI Schema - JSON Output]
+    C --> D{Schema Validator - A2UI}
+    D -->|valid| E[Component Resolver - A2UI]
+    D -->|invalid| F[Fallback Renderer - A2UI / customisable]
+    E --> G[SPGI Design System Components]
+    G --> H([Rendered UI Fragment])
+    F --> H
+    I[(SPGI Component Registry)] -.->|resolves types| E
+    C -.->|data extracted from schema| J[(Data / Props)]
+    J -.->|injected into| G
 ```
 
-- The agent never emits raw HTML — all output passes through schema validation before anything renders
-- The Component Registry is the contract boundary: agents can only reference components that exist in it
+- Agent never emits raw HTML - all output passes through schema validation before anything renders
+- Component Registry is the contract boundary - agents can only reference components that exist in it
+- Data and props are embedded directly in the schema by the agent - the agent fetches data first and includes the values inline in the schema output; the rendering layer extracts and injects them into components at render time
+- Data and props are injected at render time, keeping the schema itself lightweight
 - Fallback renderer handles graceful degradation when schema is malformed or references an unknown component
-- Data and props are injected at render time, keeping the schema itself lightweight and cacheable
 
 ---
 
-### 4.3 A2UI vs Other Rendering Approaches
+### 4.3 A2UI Example - Rating Card
 
-| Approach | Fidelity | Flexibility | Dev Effort | Agent Intelligence Required | Best For |
-|---|---|---|---|---|---|
-| **Pre-built renderer** | High | Low | High upfront | Low | Flagship views for stable, well-known datasets |
-| **Generic renderer** | Medium | Medium | Medium | Low | Standard charts and tables driven by any structured data |
-| **Declarative / A2UI** | Variable | High | Low per view | High | Dynamic combinations, novel layouts, ad-hoc queries |
-| **Direct navigation** | N/A | Low | Low | Low | Known routes and simple deterministic lookups |
+ Agent composes through component structure - prominent properties are expressed via `CardHeader` (rendered large), secondary properties via `CardBody` fields (rendered small).
 
-- These approaches are not mutually exclusive — a single response can combine a pre-built renderer for a known chart type with A2UI for the surrounding layout
-- The decision primarily hinges on how well-defined the output shape is at design time vs runtime
+```json
+{
+  "type": "Card",
+  "props": {
+    "children": [
+      {
+        "type": "CardHeader",
+        "props": {
+          "primary": "Apple Inc.",
+          "secondary": "AA-"
+        }
+      },
+      {
+        "type": "CardBody",
+        "props": {
+          "fields": [
+            { "label": "Rating Date", "value": "15 Feb 2026" },
+            { "label": "Prior Rating", "value": "A+" },
+            { "label": "Outlook",     "value": "Stable" }
+          ]
+        }
+      }
+    ]
+  }
+}
+```
+
+- `Card`, `CardHeader`, and `CardBody` are all registered components in the SPGI Component Registry (agent can only reference component types it knows exist)
+- Agent expresses visual hierarchy through component *structure*, not through styling instructions - it has no knowledge of CSS or layout internals
+- The schema is compact and data-bearing - `primary`, `secondary`, and `fields` values are all inline data embedded by the agent after fetching the rating from the underlying data API
 
 ---
 
-### 5.1 MCP Apps Overview
+### 4.4 A2UI Implementation Options
 
-MCP Apps (extension to MCP spec enables MCP servers to return **interactive HTML interfaces**, not just structured data. This can be used as mechanism for surfacing rich financial UIs directly inside partner and customer platforms.
+| Approach | Who chooses component structure | Flexibility | Reliability |
+|---|---|---|---|
+| **Fully agent-driven** | The agent | High | Lower - agent can misuse or inconsistently apply components |
+| **Template-driven** | Fixed mapping from tool output schema -> component template | Low | High - no ambiguity, consistent output |
+| **Hybrid** | Agent picks top-level component; template fills the rest | Medium | Medium |
 
-**The key distinction from plain MCP**: a standard MCP tool call returns structured data that the LLM incorporates into a text-based answer. An MCP Apps-enabled tool additionally returns a reference to a `ui://` resource — a self-contained HTML/JS/CSS application — that the host renders as an interactive UI embedded in the conversation.
+- For S&P MI, a hybrid or template-driven approach is likely preferable - predictability and consistency matter more than freestyle composition.
+- A constrained model where a tool annotates its output with a suggested component, and the agent simply fills in values, is more reliable than asking the agent to compose a ratings card from scratch on every invocation.
+
+##### Considerations
+
+- The agent knows about available components because the A2UI SDK injects the Component Registry into the agent's context. This can be done via system prompt or tool definitions.
+- This creates a tension - the larger and more complex the registry, the more context tokens are consumed just describing it.
+- The agent needs to understand not just what components *exist* but their *semantic intent* - what `CardHeader.primary` means visually - making component naming and documentation as important as the implementation itself.
+
+---
+
+### 5.1 MCP Apps - Overview
+
+#### Overview
+
+- MCP Apps (official extension to MCP spec) enables cross-organization integration e.g. surfacing S&P MI data in visual form inside partner or customer platforms
+- MCP Apps allows MCP servers to return **interactive HTML5 interfaces**
+- Whereas plain MCP tools return structured data that an agent / LLM can use, an MCP Apps-enabled tool returns a reference to a self-contained HTML/JS/CSS application that can be rendered by a host
+- Created by Anthropic, OpenAI, and the authors of MCP-UI
+- Supported in Claude (Anthropic) and ChatGPT (OpenAI) as of Jan 2026
+- Reached v1.1 as of Feb 2026
+- Generating significant interest across the industry - rich UI responses in AI-based chat products likely to be a key theme in 2026
 
 #### How it works
 
-- Each MCP Apps-enabled tool declares a `_meta.ui.resourceUri` field in its description, pointing to a `ui://` resource on the S&P MI MCP server
-- When the tool is called, the host (partner platform) fetches that resource — a bundled HTML+JS+CSS app — and renders it in a **sandboxed iframe** within the conversation
-- The iframe is strictly isolated from the host's page: it cannot access the parent DOM, cookies, or local storage
-- All communication between the app and host passes through **postMessage** (JSON-RPC) — a restricted, auditable channel; no direct function calls
-- **Bidirectional**: the embedded app can request further tool calls (e.g. a user clicks a company → app requests drill-down data), and the host pushes the results back into the app
-- Content Security Policy (CSP) headers, derived from domains declared by the S&P MI MCP server, restrict which external origins the app may load resources from — default is `default-src 'none'` (least privilege)
-
-#### Why iframe sandboxing?
-
-- Partners render S&P MI-provided HTML inside their own platforms — the sandbox guarantees the app cannot escape its container, access user credentials, or interfere with the host page
-- Only capabilities explicitly declared in the app's permissions manifest are granted — everything else is blocked by default
-- Every app–host interaction passes through a logged JSON-RPC channel, making behaviour auditable and restricting injection vectors
-- **Authentication is handled entirely at the agent-to-server boundary**: the partner AI agent authenticates with the S&P MI MCP server (e.g. via API key or OAuth token); the MCP App iframe carries no credentials and requires none — all data arrives via postMessage from the partner frontend, which proxied it from the agent. This is a significant simplification over traditional cross-vendor iframe integrations, where the embedded app must authenticate independently — typically requiring token injection into the iframe, cross-origin OAuth flows, and client-side credential management, all of which add complexity and security surface area
-
-#### Where we would use this
-
-- Delivering interactive financial dashboards (credit risk heatmaps, company tearsheets, ownership charts) directly into a customer's AI chat interface — no tab-switching, no separate login
-- Enabling in-conversation drill-down: user asks a question, gets an interactive chart, clicks an entity to load detail — the app fires further tool calls on demand without a new prompt
-- Real-time market data monitoring — the iframe maintains a live connection, updating displayed metrics as data changes
-- Embedding rich document viewers (PDF filings, research reports) that are impractical as text responses
-- Multi-step workflows requiring persistent state: screener tools, comparison tables, approval or review flows
+- Tools declare a `_meta.ui.resourceUri` field, pointing to a self-contained `ui://` resource on the S&P MI MCP server
+- When the tool is called, the host (e.g. partner platform) fetches that resource - a bundled HTML+JS+CSS app - and renders it in a **sandboxed iframe**
+- Supports bidirectional comms between app and host (JSON-RPC over postMessage)
+- Embedded app can request further tool calls, and the host pushes the results back into the app
+- Host constructs CSP headers from domains declared by MCP server; undeclared origins are blocked 
 
 ---
 
-### 5.2 MCP Apps Architecture
+### 5.2 MCP Apps - Architecture & Data Flow
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Frontend as Partner Frontend
+    participant Frontend as Partner Web Frontend
     participant Agent as Partner AI Agent
     participant LLM
-    participant Server as S&P MI MCP Server
-    participant App as S&P MI MCP App (iframe)
+    participant Server as SPGI MCP Server
+    participant App as SPGI MCP App (iframe)
 
     User->>Frontend: "show me Apple risk gauge"
     Frontend->>Agent: prompt
@@ -153,52 +194,19 @@ sequenceDiagram
     App-->>User: risk dashboard updates
 ```
 
-- The `ui://` resource is a self-contained app bundle — it can be preloaded by the host before the tool is even called, enabling streaming of tool inputs into the app
-- The host constructs CSP headers from domains declared by the MCP server; undeclared origins are blocked — the server cannot widen these constraints at runtime
-- The partner platform never needs to understand S&P MI's underlying APIs — it only speaks the MCP Apps protocol; the MCP server handles all data translation
-- New S&P MI data products can be delivered to all partner platforms simply by publishing a new MCP server — no changes required on the partner side
-
 ---
 
-### 6. Authentication, SSO & Entitlements *(suggested)*
+### 5.3 MCP Apps - Security
 
-- Single sign-on across previously siloed web apps — the literal "single door"
-- Entitlement-aware rendering: UI must reflect per-customer product licensing (not just auth, but what data/features are visible)
-- Token propagation from frontend session to agent calls to downstream data APIs
-- UX for access-denied states: graceful degradation vs upsell prompts
+#### Why iframe sandboxing?
 
----
+- Sandboxed iframes are a standard approach to enforce security in cross-vendor web app integration
+- Sandbox guarantees MCP Apps cannot escape their containers or interfere with the host page
+- Every app <-> host interaction passes through a logged JSON-RPC channel, making behaviour auditable and restricting injection vectors
 
-### 7. Streaming & Progressive Rendering *(suggested)*
+#### Authentication
 
-- UX patterns for streaming AI responses: skeleton states, partial content reveals, thinking indicators
-- Rendering strategy when the response type is not yet known (text? table? chart?)
-- Handling multi-step agent responses: showing intermediate steps vs final output only
-- Error and timeout handling mid-stream
-
----
-
-### 8. Conversation & Session Management *(suggested)*
-
-- Persisting conversation history: per-user, per-topic, or per-dataset context
-- Resuming, branching, and forking conversations
-- Sharing conversations or specific responses (e.g. sharing a synthesised report with a colleague)
-- Context window management: what gets carried forward across turns vs truncated
-
----
-
-### 9. Human-in-the-Loop & Trust Signals *(suggested)*
-
-- Financial data accuracy stakes: surfacing confidence levels, data sources, and caveats inline
-- Correction and feedback flows: allowing users to flag incorrect AI outputs
-- Citation and provenance: linking AI-synthesised answers back to underlying datasets
-- Escalation paths: when the front door should route to a human or to a legacy verified report
-
----
-
-### 10. Frontend Architecture & Extensibility *(suggested)*
-
-- How existing product teams onboard their data products into the front door without a full rewrite
-- Module federation, plugin model, or micro-frontend patterns
-- Shared design system and component library strategy across products
-- Governance: who owns the shell, who owns the plugins
+- Handled entirely at the agent-to-MCP-server boundary
+- MCP App iframe carries no credentials and requires none
+- Data arrives via postMessage from the partner frontend, which proxied it from the agent
+- Significant easier to implement than traditional cross-vendor iframe integrations, where the embedded app must authenticate independently (cross-origin OAuth flows, client-side credential management)

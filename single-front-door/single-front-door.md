@@ -9,7 +9,7 @@
 - Distinguishing deterministic (simple, low-cost) queries from non-deterministic (complex, agent-driven) ones
 - Routing strategy - rule-based / retrieval-based answers vs full LLM reasoning chains
 - Avoiding unnecessary token burn for queries that can be resolved with direct lookup or navigation
-- Rendering Strategy - Pre-built vs Generic vs Declarative UI (e.g. A2UI) **TODO - This should really be a section in its own right**
+- Rendering Strategy - Pre-built vs Generic vs Declarative UI (e.g. A2UI) **TODO - This could be expanded to be a section in its own right**
 - Upsell / cross-sell opportunities e.g. previews of complementary, related products / datasets
 
 #### Navigation
@@ -21,13 +21,13 @@
 
 ### 2. Performance
 
-- Users expect visual interfaces to be highly performant when it comes to data selection, filtering, sorting, etc.
+- Users expect visual interfaces to be highly performant for data selection, filtering, sorting, etc. operations
 - However, when using issuing complex prompts to AI agent chat interfaces with text-based responses, user performance expectations tend to be lower.
-- **Significant UX implications with rich visual interactive interfaces in AI platforms. Response latency and interaction model differs markedly between deterministic and non-deterministic paths. There is a risk of creating a mismatch in performance expectations.**
+- **Hence there are significant UX implications when exposing rich visual interactive interfaces in AI agent platforms. Response latency and interaction models differ markedly between deterministic and non-deterministic queries. There is a real risk of creating a mismatch in performance expectations.**
 
 ---
 
-### 3. Token Cost and Performance - Data Plane vs Control Plane
+### 3. Token Burn - Data Plane vs Control Plane
 
 #### 3.1 Overview
 
@@ -35,7 +35,7 @@
   - **Non-deterministic** - synthesis and summarization across sources. This leverages LLM reasoning
   - **Deterministic** - structured dataset retrieval (repeatable, exact, can be large).
 - **The architecture choice for each query type has significant cost, performance and reliability implications**
-- The query types can be handle by two contrasting patterns:
+- The query types can be handled by two contrasting patterns:
   - **Data Plane** - where raw data flows through the LLM. The agent calls MCP tools, data is inserted into LLM context, LLM returns data to the frontend
   - **Control Plane** - LLM decides what to fetch and resolves parameters. Data bypasses the LLM and is retrieved directly by the frontend via traditional data APIs
 - When raw data flows through the LLM, **token costs scale directly with payload size** - e.g. 365-day multi-series dataset can consume thousands of input tokens with no reasoning benefit from the LLM processing it
@@ -48,44 +48,63 @@
 
 ---
 
-### 3.2 Approach A - Data Plane (All-in Agent)
+### 3.2 Data Plane Approach
 
 The agent calls MCP tools, raw data is inserted into the LLM context, and the LLM returns the result directly to the frontend.
 
-| | |
-|---|---|
-| **Pros** | Simple mental model - ask -> agent fetches -> agent answers; fast to prototype across dozens of data sources; works well for small payloads and synthesis tasks |
-| **Cons** | Token cost and latency both scale with payload size; risk of truncation, formatting loss, or accidental data transformation by the LLM; difficult to support rich interactive UX (charts, drill-downs, cross-filters) |
-| **Best for** | Small bounded payloads (single quote, one KPI, top 10 rows); tasks where natural-language output is the primary goal (explain, summarise, compare); conversational exploration where insight matters more than exactness |
+#### Pros
+- Simple model e.g. prompt -> agent fetches -> agent answers
+- Works well for small payloads and synthesis tasks
 
-Guardrails required to make this viable:
-- Hard limits on tool response size (rows / bytes / tokens)
-- Pagination and cursors rather than full data dumps
-- "Summarise-only" tool variants that return aggregates rather than raw rows
+#### Cons
+- Token cost and latency both scale with payload size
+- Risk of formatting loss, or accidental data transformation by the LLM
+- Difficult to support rich interactive components e.g. charts, drill-downs, filters, etc.
 
----
+#### Use Cases
+- Small bounded payloads .e.g. single records, small / filtered datasets, top 10 rows, etc.
+- Tasks where natural-language output is the primary goal e.g. explain, summarize, compare, generate insights
 
-### 3.3 Approach B - Control Plane (Hybrid)
+#### Open Questions
 
-The LLM infers intent and resolves parameters, returning a **Query Plan** (structured JSON). The frontend or a backend-for-frontend executes the plan by calling traditional data APIs directly - the bulk data never touches the LLM.
-
-| | |
-|---|---|
-| **Pros** | Predictable token cost (model sees parameters, not payload); fast and cacheable data retrieval via optimised APIs; schemas stay intact end-to-end; rich interactive UX behaves like a normal analytics product; entitlements enforced at the API tier |
-| **Cons** | More engineering - requires a clean contract between intent -> query plan and query plan -> API calls + UI components; requires standardised query semantics across data sources or a translation layer |
-| **Best for** | Large datasets (365-day time series, multi-series charts, portfolios, watchlists); anything requiring strong determinism and audit trails; interactions that will be filtered, sorted or exported repeatedly |
-
-The Query Plan contract - the LLM produces a structured JSON object containing:
-- Datasource / tool identifier and resolved entity IDs (instrument, portfolio, etc.)
-- Fields, metrics, time range, grain and filters
-- Desired visual component type (table / line chart / heatmap)
-- Provenance stub - what the LLM decided and why
+- How can Single Front Door infer that data plane is the right approach?
+  - Certain tools might always lend themselves to a data plane approach.
+  - But for other tools, it might depend what parameters they are called with e.g. where parameters have a key bearing on tool response size (rows / bytes) and typical token usage.
 
 ---
 
-### 3.4 Approach C - Two-Stage Bounded Summarisation
+### 3.3 Control Plane Approach
 
-**TODO - Consider adding a third approach - data fetched outside LLM but model given a bounded subset e.g. key statistics**
+The LLM infers intent and resolves parameters, returning a query plan as structured JSON. The frontend (or BFF) executes the query plan by calling traditional data APIs directly. The end result is that the bulk data never touches the LLM.
+
+#### Pros
+- Predictable token cost - model only sees parameters, not payload
+- Fast and cacheable data retrieval via optimised APIs
+- Schemas stay intact end-to-end. Rich interactive visuals behave like a regular analytics product
+
+#### Cons
+- More complex than Data Plane Approach. In particular, needs a clean contract between intent -> query plan and query plan -> API calls + UI components
+- **Non-trival challenges around standardized query semantics across data sources** e.g. parameter names, filter syntax, etc.
+- Might require a translation layer between query plan params and data API params.
+
+#### Use Cases
+- Large datasets e.g. 365-day time series, multi-series charts, etc.
+- Anything requiring strong determinism and audit trails
+- Interactions that will be filtered, sorted or exported repeatedly
+
+#### Considerations - Query Plan
+
+The LLM will need to produce a structured JSON object containing:
+- Datasource / tool identifier and resolved entity IDs (e.g. instrument, etc.)
+- Fields, metrics, time range, granularity and filters
+- Desired visual component type e.g. table, chart, heatmap, etc.
+- Decision record - what the LLM decided and why
+
+---
+
+### 3.4 Two-Stage Bounded Summarization Approach
+
+**TODO - Consider adding a third approach here, where the data is fetched outside the LLM but the model is given a bounded subset e.g. key statistics, etc.**
 
 ---
 

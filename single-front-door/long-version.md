@@ -34,6 +34,60 @@
 
 ---
 
+### New 3.2 Data Plane Approach
+
+The agent calls MCP tools, raw data is inserted into the LLM context, and the LLM returns the result directly to the frontend.
+
+#### Pros
+- Simple model e.g. ask -> agent fetches -> agent answers
+- Works well for small payloads and synthesis tasks
+
+#### Cons
+- Token cost and latency both scale with payload size
+- Risk of formatting loss, or accidental data transformation by the LLM
+- Difficult to support rich interactive UX e.g. charts, drill-downs, filters, etc.
+
+#### Use Cases
+- Small bounded payloads .e.g. small datasets, top 10 rows, etc.
+- Tasks where natural-language output is the primary goal e.g. explain, summarize, compare, generate insights
+
+#### Open Questions
+
+- How can Single Front Door infer that data plane is the right approach?
+  - Certain tools might always lend themselves to a data plane approach.
+  - But for other tools, it might depend what parameters they are called with e.g. where this has a key bearing on tool response size (rows / bytes) and typical token usage.
+- Would we need variants of tools that return summaries / aggregates rather than all the raw data?
+
+---
+
+### New 3.3 Control Plane Approach
+
+The LLM infers intent and resolves parameters, returning a query plan as structured JSON. The frontend (or BFF) executes the query plan by calling traditional data APIs directly. The end result is that the bulk data never touches the LLM.
+
+#### Pros
+- Predictable token cost - model only sees parameters, not payload
+- Fast and cacheable data retrieval via optimised APIs
+- Schemas stay intact end-to-end. Rich interactive visuals behave like a regular analytics product
+
+#### Cons
+- Requires more engineering than Data Plane Approach. In particualr, needs a clean contract between intent -> query plan and query plan -> API calls + UI components
+- Requires standardised query semantics across data sources or a translation layer
+
+#### Best for
+- Large datasets (365-day time series, multi-series charts, portfolios, watchlists)
+- Anything requiring strong determinism and audit trails
+- Interactions that will be filtered, sorted or exported repeatedly
+
+#### Query Plan
+
+The LLM produces a structured JSON object containing:
+- Datasource / tool identifier and resolved entity IDs (e.g. instrument)
+- Fields, metrics, time range, grain and filters
+- Desired visual component type (table / chart / heatmap)
+- Decision record - what the LLM decided and why
+
+---
+
 ### New 3.4 Approach C - Two-Stage Bounded Summarisation
 
 A hybrid of the two: deterministic data is fetched outside the LLM via Approach B, but the model is additionally given a *bounded* subset - aggregates, anomalies, or key statistics - and generates a narrative alongside the rendered data.

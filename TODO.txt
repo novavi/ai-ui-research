@@ -1,6 +1,8 @@
 TODO
 ----
 
+ Architecture standards for frontend
+ MF 1.0, ES modules / import maps, MF 2.0
 
 
 ----------
